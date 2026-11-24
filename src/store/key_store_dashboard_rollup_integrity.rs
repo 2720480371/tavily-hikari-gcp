@@ -200,6 +200,38 @@ impl KeyStore {
         .bind(now)
         .execute(&self.pool)
         .await?;
+        self.normalize_dashboard_rollup_integrity_done_work_on_startup()
+            .await
+    }
+
+    pub(crate) async fn normalize_dashboard_rollup_integrity_done_work_on_startup(
+        &self,
+    ) -> Result<(), ProxyError> {
+        // Completed checkpoints outlive the process-local mutation counter. Drop only
+        // that counter's contribution when the durable source and row fence still match;
+        // changed source rows must continue to invalidate the checkpoint normally.
+        sqlx::query(
+            r#"
+            UPDATE dashboard_rollup_integrity_work_items AS item
+            SET source_version = durable_source_version
+            WHERE status = 'done'
+              AND source_version != durable_source_version
+              AND durable_source_version = (
+                  SELECT COALESCE(SUM(revision), 0)
+                  FROM dashboard_rollup_source_revisions
+                  WHERE bucket_start >= item.range_start AND bucket_start < item.range_end
+              )
+              AND source_fence >= (
+                  SELECT COALESCE(MAX(id), 0)
+                  FROM request_logs
+                  WHERE visibility = ?
+                    AND created_at >= item.range_start AND created_at < item.range_end
+              )
+            "#,
+        )
+        .bind(REQUEST_LOG_VISIBILITY_VISIBLE)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

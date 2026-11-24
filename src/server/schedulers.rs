@@ -92,13 +92,8 @@ fn request_logs_gc_made_progress(report: &RequestLogsGcReport) -> bool {
 
 fn dashboard_integrity_admission_retry_delay(reason: &str) -> i64 {
     match reason {
-        // Keep the real pool and contention gates intact, but probe again on
-        // the aged-turn cadence instead of parking the durable recovery job
-        // for five minutes after a transient defer.
-        "foreground_pressure" | "pool_pressure" | "recent_contention" => {
-            SQLITE_MAINTENANCE_ADMISSION_RETRY_DELAY_SECS
-        }
-        _ => SQLITE_MAINTENANCE_ADMISSION_RETRY_DELAY_SECS,
+        "foreground_pressure" | "pool_pressure" | "recent_contention" => 30,
+        _ => DASHBOARD_ROLLUP_INTEGRITY_DEFERRED_RETRY_SECS,
     }
 }
 
@@ -110,20 +105,17 @@ mod dashboard_integrity_admission_tests {
     fn dashboard_integrity_admission_pressure_uses_aged_turn_retry() {
         assert_eq!(
             dashboard_integrity_admission_retry_delay("foreground_pressure"),
-            SQLITE_MAINTENANCE_ADMISSION_RETRY_DELAY_SECS
+            30
         );
         assert_eq!(
             dashboard_integrity_admission_retry_delay("pool_pressure"),
-            SQLITE_MAINTENANCE_ADMISSION_RETRY_DELAY_SECS
+            30
         );
         assert_eq!(
             dashboard_integrity_admission_retry_delay("recent_contention"),
-            SQLITE_MAINTENANCE_ADMISSION_RETRY_DELAY_SECS
+            30
         );
-        assert_eq!(
-            dashboard_integrity_admission_retry_delay("bulk_busy"),
-            SQLITE_MAINTENANCE_ADMISSION_RETRY_DELAY_SECS
-        );
+        assert_eq!(dashboard_integrity_admission_retry_delay("bulk_busy"), 15);
     }
 
     #[test]
@@ -150,6 +142,7 @@ const HA_OUTBOX_GC_BASELINE_SECS: i64 = 60 * 60;
 const AUTH_TOKEN_LOGS_ALERT_INDEX_ENSURE_JOB_TYPE: &str =
     "auth_token_logs_alert_index_ensure";
 const DASHBOARD_ROLLUP_INTEGRITY_JOB_TYPE: &str = "dashboard_rollup_integrity";
+const DASHBOARD_ROLLUP_INTEGRITY_DEFERRED_RETRY_SECS: i64 = 15;
 const DASHBOARD_ROLLUP_INTEGRITY_FAILURE_BACKOFF_SECS: i64 = 60;
 const DASHBOARD_ROLLUP_INTEGRITY_WATCHDOG_SECS: u64 = 60;
 const DASHBOARD_ALERT_PROJECTION_INTERVAL_SECS: u64 = 10;
@@ -622,8 +615,19 @@ async fn run_dashboard_rollup_integrity_claimed_job(
             .await;
         }
     };
-    let (message, next_delay_secs) = match state.proxy.run_dashboard_rollup_integrity_slice().await {
-        Ok(result) => (format!("state={}", result.state), result.next_delay_secs),
+    let (message, available_at) = match state.proxy.run_dashboard_rollup_integrity_slice().await {
+        Ok(result) => {
+            let available_at = if result.state == "deferred" {
+                state.proxy.backend_time().now_ts().saturating_add(
+                    result
+                        .next_delay_secs
+                        .max(DASHBOARD_ROLLUP_INTEGRITY_DEFERRED_RETRY_SECS),
+                )
+            } else {
+                now.saturating_add(result.next_delay_secs)
+            };
+            (format!("state={}", result.state), available_at)
+        }
         Err(err) => {
             let available_at = now.saturating_add(DASHBOARD_ROLLUP_INTEGRITY_FAILURE_BACKOFF_SECS);
             let _ = state
@@ -657,7 +661,7 @@ async fn run_dashboard_rollup_integrity_claimed_job(
         job_id,
         claim_generation,
         &message,
-        now.saturating_add(next_delay_secs),
+        available_at,
     )
     .await
 }

@@ -1,6 +1,8 @@
 const DASHBOARD_QUOTA_RECOVERY_MAX_SELECTS_PER_ROUND: usize = 8;
 const DASHBOARD_QUOTA_RECOVERY_ROUND_BUDGET: Duration = Duration::from_millis(250);
 const DASHBOARD_QUOTA_RECOVERY_RESUME_DELAY: Duration = Duration::from_secs(1);
+// Progressing batches yield briefly; real contention retains the one-second backoff.
+const DASHBOARD_QUOTA_RECOVERY_PROGRESS_DELAY: Duration = Duration::from_millis(20);
 struct DashboardQuotaRecoveryDraft {
     target: DashboardQuotaSampleWatermark,
     target_source_id: i64,
@@ -213,7 +215,7 @@ impl KeyStore {
                     DashboardQuotaRecoveryQuery::Continue => {
                         deferred_rounds = 0;
                         self.backend_time
-                            .sleep(DASHBOARD_QUOTA_RECOVERY_RESUME_DELAY)
+                            .sleep(DASHBOARD_QUOTA_RECOVERY_PROGRESS_DELAY)
                             .await;
                         continue;
                     }
@@ -259,17 +261,17 @@ impl KeyStore {
                 }
                 DashboardQuotaRecoveryRoundStatus::Continue
                 | DashboardQuotaRecoveryRoundStatus::Deferred => {
-                    if round.status == DashboardQuotaRecoveryRoundStatus::Continue {
+                    let resume_delay = if round.status == DashboardQuotaRecoveryRoundStatus::Continue {
                         deferred_rounds = 0;
+                        DASHBOARD_QUOTA_RECOVERY_PROGRESS_DELAY
                     } else {
                         deferred_rounds = deferred_rounds.saturating_add(1);
                         if deferred_rounds >= DASHBOARD_QUOTA_RECOVERY_MAX_ATTEMPTS {
                             return Err(self.dashboard_quota_read_budget_deferred());
                         }
-                    }
-                    self.backend_time
-                        .sleep(DASHBOARD_QUOTA_RECOVERY_RESUME_DELAY)
-                        .await;
+                        DASHBOARD_QUOTA_RECOVERY_RESUME_DELAY
+                    };
+                    self.backend_time.sleep(resume_delay).await;
                 }
                 DashboardQuotaRecoveryRoundStatus::Invalidated => {
                     deferred_rounds = 0;

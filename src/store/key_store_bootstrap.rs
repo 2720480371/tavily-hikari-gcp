@@ -922,6 +922,11 @@ impl KeyStore {
             },
         )
         .await?;
+        if exclusive {
+            store
+                .normalize_dashboard_rollup_integrity_done_work_on_startup()
+                .await?;
+        }
         Ok(store)
     }
 

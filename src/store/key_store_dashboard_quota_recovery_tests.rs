@@ -131,7 +131,7 @@ async fn dashboard_quota_recovery_resumes_a_private_draft_after_native_deadline(
 }
 
 #[tokio::test]
-async fn dashboard_quota_recovery_resumes_after_one_backend_second() {
+async fn dashboard_quota_recovery_resumes_after_a_short_backend_yield() {
     let (backend_time, _manual_time) = BackendTime::manual_from_ts(1_700_000_000);
     let (_temp_dir, store, bounds) = dashboard_quota_recovery_store_with_time(backend_time).await;
     seed_dashboard_quota_recovery_samples(&store, 31).await;
@@ -149,12 +149,12 @@ async fn dashboard_quota_recovery_resumes_after_one_backend_second() {
 
     let recovered = tokio::time::timeout(Duration::from_secs(5), recovery)
         .await
-        .expect("the same builder resumes after one backend second")
+        .expect("the same builder resumes after a short backend yield")
         .expect("join quota recovery")
-        .expect("recover quota model after one backend second");
+        .expect("recover quota model after a short backend yield");
     assert!(
-        started_at.elapsed() >= Duration::from_millis(900),
-        "recovery must yield for the one-second resume delay",
+        started_at.elapsed() >= Duration::from_millis(20),
+        "recovery must yield between bounded read rounds",
     );
     assert_eq!(recovered.snapshot.month.upstream_actual_credits, 31);
     let select_trace = select_trace.lock().expect("quota recovery select trace");
