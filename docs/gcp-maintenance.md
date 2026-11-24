@@ -26,10 +26,11 @@ work keeps its existing startup reset behavior. Exclusive offline statistics rec
 normalizes completed checkpoints, without resetting its resumable pending work. The shared
 request-log GC opener does not normalize checkpoints while the service may still be running.
 
-The regression tests live in `src/tests/dashboard_rollup_integrity.rs` and use disposable local
-SQLite fixtures. The existing backend runner covers them in the `lib-request-rollup-integrity`
-shard. Quota-recovery and scheduler checks also cover the retained deployment patches. Follow
-`docs/agents/testing.md` when choosing an execution target.
+The restart regression tests live in
+`src/tests/dashboard_rollup_integrity/restart_recovery.rs` and use disposable local SQLite fixtures.
+The existing backend runner covers them in the `lib-request-rollup-integrity` shard through its
+unchanged parent-module prefix. Quota-recovery and scheduler checks also cover the retained
+deployment patches. Follow `docs/agents/testing.md` when choosing an execution target.
 
 ## Delivery boundary
 
