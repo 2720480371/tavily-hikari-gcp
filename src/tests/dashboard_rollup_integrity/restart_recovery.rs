@@ -105,8 +105,6 @@ async fn integrity_restart_drops_process_local_version_from_done_work_and_can_se
         process_local_source_version > 0,
         "the fixture must persist an in-process coalescer contribution"
     );
-    let persisted_source_version =
-        durable_source_version.saturating_add(process_local_source_version);
     let source_fence: i64 = sqlx::query_scalar("SELECT COALESCE(MAX(id), 0) FROM request_logs")
         .fetch_one(&proxy.key_store.pool)
         .await
