@@ -397,10 +397,13 @@ async fn integrity_restart_keeps_done_work_stale_after_real_source_update_or_ins
 async fn integrity_exclusive_offline_reopen_normalizes_done_without_resetting_pending() {
     let db_path = temp_db_path("dashboard-rollup-integrity-offline-done-normalization");
     let db_str = db_path.to_string_lossy().to_string();
-    let proxy = TavilyProxy::with_endpoint(Vec::<String>::new(), DEFAULT_UPSTREAM, &db_str)
-        .await
-        .expect("create proxy");
-    let now = proxy.backend_time().now_ts();
+    let store = crate::store::KeyStore::open_for_request_statistics_recovery_with_time(
+        &db_str,
+        BackendTime::system(),
+    )
+    .await
+    .expect("create exclusive statistics recovery store");
+    let now = store.backend_time.now_ts();
     let done_range_start =
         (now - 2 * SECS_PER_HOUR).div_euclid(SECS_PER_FIVE_MINUTES) * SECS_PER_FIVE_MINUTES;
     let pending_range_start = done_range_start + SECS_PER_FIVE_MINUTES;
@@ -416,7 +419,7 @@ async fn integrity_exclusive_offline_reopen_normalizes_done_without_resetting_pe
     .bind(done_range_start)
     .bind(done_range_start + SECS_PER_FIVE_MINUTES)
     .bind(now)
-    .execute(&proxy.key_store.pool)
+    .execute(&store.pool)
     .await
     .expect("seed completed work with a dead process-local version");
     sqlx::query(
@@ -431,15 +434,11 @@ async fn integrity_exclusive_offline_reopen_normalizes_done_without_resetting_pe
     .bind(pending_range_start + SECS_PER_FIVE_MINUTES)
     .bind(pending_range_start + 60)
     .bind(now)
-    .execute(&proxy.key_store.pool)
+    .execute(&store.pool)
     .await
     .expect("seed pending checkpoint");
 
-    proxy
-        .shutdown_request_stats_coalescer(Duration::from_secs(2))
-        .await
-        .expect("stop proxy worker");
-    drop(proxy);
+    drop(store);
 
     let reopened = crate::store::KeyStore::open_for_request_statistics_recovery_with_time(
         &db_str,
