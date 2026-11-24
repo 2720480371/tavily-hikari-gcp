@@ -1,5 +1,7 @@
 use super::*;
 
+mod restart_recovery;
+
 #[tokio::test]
 async fn joint_recovery_rejects_an_active_service_owner() {
     let db_path = temp_db_path("request-statistics-recovery-active-service");
@@ -956,68 +958,6 @@ async fn integrity_keeps_initial_hot_scan_ahead_of_history() {
     .await
     .expect("read untouched history rollup");
     assert_eq!(history_rollup, 0);
-}
-
-#[tokio::test]
-async fn integrity_resets_persisted_checkpoint_after_restart() {
-    let db_path = temp_db_path("dashboard-rollup-integrity-restart-checkpoint");
-    let db_str = db_path.to_string_lossy().to_string();
-    let proxy = TavilyProxy::with_endpoint(Vec::<String>::new(), DEFAULT_UPSTREAM, &db_str)
-        .await
-        .expect("create initial proxy");
-    let now = proxy.backend_time().now_ts();
-    let range_start =
-        (now - 10 * SECS_PER_MINUTE).div_euclid(SECS_PER_FIVE_MINUTES) * SECS_PER_FIVE_MINUTES;
-    let range_end = range_start + SECS_PER_FIVE_MINUTES;
-    pin_integrity_hot_work(&proxy, range_start, range_end).await;
-    for offset in 0..501_i64 {
-        insert_visible_dashboard_log(
-            &proxy,
-            range_start + offset.rem_euclid(SECS_PER_FIVE_MINUTES),
-        )
-        .await;
-    }
-    let checkpointed = proxy
-        .run_dashboard_rollup_integrity_slice()
-        .await
-        .expect("persist a source aggregation checkpoint");
-    assert_eq!(checkpointed.state, "deferred");
-    sqlx::query(
-        "UPDATE request_logs SET business_credits = 9 WHERE created_at >= ? AND created_at < ?",
-    )
-    .bind(range_start)
-    .bind(range_end)
-    .execute(&proxy.key_store.pool)
-    .await
-    .expect("settle source credits during the hard-stop gap");
-    proxy
-        .shutdown_request_stats_coalescer(Duration::from_secs(2))
-        .await
-        .expect("stop initial proxy worker");
-    drop(proxy);
-
-    let restarted = TavilyProxy::with_endpoint(Vec::<String>::new(), DEFAULT_UPSTREAM, &db_str)
-        .await
-        .expect("restart proxy and reset persisted checkpoint");
-    let first = restarted
-        .run_dashboard_rollup_integrity_slice()
-        .await
-        .expect("restart source pagination");
-    assert_eq!(first.state, "deferred");
-    let repaired = restarted
-        .run_dashboard_rollup_integrity_slice()
-        .await
-        .expect("repair from the refreshed source checkpoint");
-    assert_eq!(repaired.state, "repaired");
-    let credits: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(local_estimated_credits), 0) FROM dashboard_request_rollup_buckets WHERE bucket_secs = 60 AND bucket_start >= ? AND bucket_start < ?",
-    )
-    .bind(range_start)
-    .bind(range_end)
-    .fetch_one(&restarted.key_store.pool)
-    .await
-    .expect("read restarted repair credits");
-    assert_eq!(credits, 501 * 9);
 }
 
 #[tokio::test]

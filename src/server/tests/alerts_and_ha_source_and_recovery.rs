@@ -2428,19 +2428,16 @@ fn request_logs_gc_continuation_tracks_durable_progress() {
 }
 
 #[test]
-fn dashboard_integrity_admission_pressure_uses_short_probe_for_all_pressure() {
+fn dashboard_integrity_admission_pressure_uses_longer_probe_under_contention() {
     assert_eq!(
         dashboard_integrity_admission_retry_delay("foreground_pressure"),
-        SQLITE_MAINTENANCE_ADMISSION_RETRY_DELAY_SECS
+        30
     );
     assert_eq!(
         dashboard_integrity_admission_retry_delay("pool_pressure"),
-        SQLITE_MAINTENANCE_ADMISSION_RETRY_DELAY_SECS
+        30
     );
-    assert_eq!(
-        dashboard_integrity_admission_retry_delay("bulk_busy"),
-        SQLITE_MAINTENANCE_ADMISSION_RETRY_DELAY_SECS
-    );
+    assert_eq!(dashboard_integrity_admission_retry_delay("bulk_busy"), 15);
 }
 
 #[test]
